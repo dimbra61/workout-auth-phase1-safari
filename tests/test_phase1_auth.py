@@ -115,3 +115,17 @@ def test_prototype_app_rejects_production_before_network():
     at.run()
     assert not at.exception
     assert any('本番の接続設定は使用できません' in e.value for e in at.error)
+
+
+def test_storage_fault_forces_server_unauthenticated():
+    from streamlit.testing.v1 import AppTest
+    from pathlib import Path
+    at=AppTest.from_file(str(Path(__file__).parents[1]/'phase1_app.py'))
+    at.secrets['phase1']={'url':'https://sicipmngqimzpwwvumyy.supabase.co','publishable_key':'sb_publishable_test','owner_id':OWNER}
+    at.run()
+    at.toggle[0].set_value(True).run()
+    assert not at.exception
+    assert any('サーバー側も未認証' in w.value for w in at.warning)
+    assert len(at.success)==0
+    assert at.session_state['phase1_gate']._client is None
+    assert at.session_state['probe_operations']==0

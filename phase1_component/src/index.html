@@ -2,4 +2,4 @@
 <style>body{font:16px sans-serif;padding:8px;color:#172033}input,button{font:inherit;padding:10px;margin:5px 0;box-sizing:border-box}input:not([type=checkbox]){width:100%}button{margin-right:8px}#status{min-height:45px}label{display:block}</style>
 <form id="login"><label>メールアドレス<input id="email" type="email" autocomplete="username" required></label><label>パスワード<input id="password" type="password" autocomplete="current-password" required></label><label><input id="remember" type="checkbox"> この端末でログインを保持</label><button type="submit">ログイン</button></form>
 <button id="retry" type="button">接続・復元を再確認</button><button id="logout" type="button">ログアウト</button><p id="status" role="status">認証を準備しています。</p>
-<script src="bundle.js"></script></html>
+<hr><p id="storage-status" role="status"></p><pre id="storage-events"></pre><p id="socket-status"></p><button id="disconnect" type="button">WebSocketを1回切断（検証用）</button><pre id="socket-events"></pre><script src="bundle.js"></script></html>

@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import fs from 'node:fs';
 import {AuthBridge,clearProjectStorage} from '../src/bridge.mjs';
+import {checkStorage,installSocketProbe} from '../src/probes.mjs';
 const source=fs.readFileSync(new URL('../src/main.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
 function harness(referrer='https://test-app.example/') {
   const listeners={}, sent=[], clients=[];
   const parent={postMessage:(value,target)=>sent.push({value,target})};
   const elements=new Map();
   const storage=()=>{const values=new Map();return {getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)};};
-  const context=vm.createContext({AuthBridge,clearProjectStorage,URL,Date,Map,Object,Number,Error,setTimeout,
+  const context=vm.createContext({AuthBridge,clearProjectStorage,checkStorage,installSocketProbe,setInterval:()=>0,URL,Date,Map,Object,Number,Error,setTimeout,
     navigator:{onLine:true},parent,location:{origin:'https://test-app.example'},
     localStorage:storage(),sessionStorage:storage(),
     addEventListener:(type,fn)=>listeners[type]=fn,
