@@ -20864,6 +20864,89 @@ ${suffix}`;
     }
   }
 
+  // src/probes.mjs
+  function checkStorage(getStorage, fail = false) {
+    const operations = ["setItem", "getItem", "removeItem"];
+    const results = [];
+    for (const kind of ["localStorage", "sessionStorage"]) {
+      const key = "phase1.availability.probe";
+      for (const operation of operations) {
+        try {
+          const storage2 = getStorage(kind);
+          if (fail) throw new Error("simulated storage unavailable");
+          if (operation === "setItem") storage2.setItem(key, "probe");
+          else if (operation === "getItem") {
+            if (storage2.getItem(key) !== "probe") throw Error("unavailable");
+          } else storage2.removeItem(key);
+          results.push({ kind, operation, ok: true });
+        } catch (_) {
+          results.push({ kind, operation, ok: false });
+        }
+      }
+    }
+    return { ok: results.every((x) => x.ok), results };
+  }
+  function installSocketProbe(host) {
+    if (host.__phase1SocketProbe) return host.__phase1SocketProbe;
+    const Native = host.WebSocket;
+    const state = {
+      tab: host.crypto.randomUUID().slice(0, 8),
+      events: [],
+      socket: null,
+      connected: false,
+      closes: 0,
+      opens: 0,
+      serial: 0
+    };
+    const tracked = /* @__PURE__ */ new WeakSet();
+    const record = (event, id) => {
+      state.events.push({ event, id, time: (/* @__PURE__ */ new Date()).toISOString() });
+      state.events = state.events.slice(-12);
+    };
+    const observe = (socket) => {
+      const url = new URL(socket.url);
+      if (url.host !== host.location.host || !url.pathname.endsWith("/_stcore/stream") || tracked.has(socket)) return;
+      tracked.add(socket);
+      const id = ++state.serial;
+      state.socket = socket;
+      if (socket.readyState === 1) {
+        state.connected = true;
+        record("ATTACHED_OPEN", id);
+      }
+      socket.addEventListener("open", () => {
+        state.socket = socket;
+        state.connected = true;
+        state.opens++;
+        record("OPEN", id);
+      });
+      socket.addEventListener("close", () => {
+        if (state.socket === socket) state.connected = false;
+        state.closes++;
+        record("CLOSE", id);
+      });
+    };
+    const send2 = Native.prototype.send;
+    Native.prototype.send = function(...args) {
+      observe(this);
+      return Reflect.apply(send2, this, args);
+    };
+    host.WebSocket = new Proxy(Native, { construct(target, args, newTarget) {
+      const socket = Reflect.construct(target, args, newTarget);
+      observe(socket);
+      return socket;
+    } });
+    const probe = {
+      snapshot: () => ({ tab: state.tab, connected: state.connected, closes: state.closes, opens: state.opens, events: state.events.slice() }),
+      disconnect: () => {
+        if (!state.socket || state.socket.readyState !== 1) return false;
+        state.socket.close(4001, "phase1-test");
+        return true;
+      }
+    };
+    host.__phase1SocketProbe = probe;
+    return probe;
+  }
+
   // src/main.js
   var parentOrigin = location.origin;
   if (document.referrer && new URL(document.referrer).origin !== parentOrigin) {
@@ -20875,6 +20958,25 @@ ${suffix}`;
   var client;
   var config;
   var subscription;
+  var storageBlocked = false;
+  var socketProbe;
+  try {
+    socketProbe = installSocketProbe(parent);
+  } catch (_) {
+  }
+  function renderProbe() {
+    if (!socketProbe) {
+      ui("socket-status").textContent = "WebSocket\u8A08\u6E2C\u4E0D\u53EF\uFF08\u672A\u5408\u683C\uFF09";
+      return;
+    }
+    const s = socketProbe.snapshot();
+    ui("socket-status").textContent = `\u30BF\u30D6 ${s.tab} / ${s.connected ? "\u63A5\u7D9A\u4E2D" : "\u672A\u63A5\u7D9A\u30FB\u672A\u6355\u6349"} / CLOSE ${s.closes} / OPEN ${s.opens}`;
+    ui("socket-events").textContent = s.events.map((e) => `${e.time} ${e.event} \u63A5\u7D9A${e.id}`).join("\n");
+  }
+  setInterval(renderProbe, 500);
+  ui("disconnect").addEventListener("click", () => {
+    if (!socketProbe?.disconnect()) ui("socket-status").textContent = "\u672A\u6355\u6349\u3067\u3059\u3002\u5148\u306B\u30B5\u30FC\u30D0\u30FC\u5074\u3067\u518D\u78BA\u8A8D\u3092\u62BC\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
+  });
   var sequence = 0;
   var nextSequence = () => {
     try {
@@ -20915,6 +21017,7 @@ ${suffix}`;
     return true;
   }
   function makeClient() {
+    if (storageBlocked) return;
     const key = `workout.phase1.${new URL(config.url).host}`;
     client = createClient(config.url, config.publishable_key, { auth: { storageKey: key, storage, persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } });
     bridge = new AuthBridge({
@@ -20941,6 +21044,25 @@ ${suffix}`;
       client.auth.stopAutoRefresh();
     }
     config = args;
+    const available = checkStorage((kind) => kind === "localStorage" ? localStorage : sessionStorage, args.storage_fault === true);
+    storageBlocked = !available.ok;
+    ui("storage-status").textContent = storageBlocked ? `\u4FDD\u5B58\u9818\u57DF\u3092\u5229\u7528\u3067\u304D\u307E\u305B\u3093\u3002\u8A8D\u8A3C\u3092\u505C\u6B62\u3057\u307E\u3057\u305F\u3002\u518D\u30ED\u30B0\u30A4\u30F3\u304C\u5FC5\u8981\u3067\u3059\u3002${args.storage_fault ? "\uFF08API\u5931\u6557\u306E\u6A21\u64EC\uFF09" : ""} \u65E2\u5B58\u4FDD\u5B58\u60C5\u5831\u306E\u524A\u9664\u306F\u78BA\u8A8D\u3057\u3066\u3044\u307E\u305B\u3093\u3002` : "\u4FDD\u5B58\u9818\u57DF\u306E\u8AAD\u307F\u66F8\u304D\u78BA\u8A8D\uFF1A\u6210\u529F";
+    ui("storage-events").textContent = available.results.map((x) => `${x.kind}.${x.operation}: ${x.ok ? "OK" : "ERROR"}`).join("\n");
+    if (storageBlocked) {
+      if (bridge) {
+        bridge.closed = true;
+        bridge.block();
+      }
+      memory.clear();
+      remember = false;
+      ui("password").value = "";
+      ui("remember").checked = false;
+      ui("remember").disabled = true;
+      send("streamlit:setComponentValue", { value: { nonce: config.nonce, sequence: nextSequence(), status: "blocked", access_token: null }, dataType: "json" });
+      ui("status").textContent = "\u4FDD\u5B58\u4E0D\u53EF\u306E\u305F\u3081\u672A\u8A8D\u8A3C\u3067\u3059\u3002";
+      return;
+    }
+    ui("remember").disabled = false;
     try {
       remember = localStorage.getItem(`workout.phase1.${new URL(config.url).host}.remember`) === "true";
       ui("remember").checked = remember;
@@ -20953,7 +21075,10 @@ ${suffix}`;
   });
   ui("login").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!bridge) return;
+    if (storageBlocked || !bridge) {
+      ui("password").value = "";
+      return;
+    }
     const password = ui("password").value;
     ui("password").value = "";
     try {
@@ -20982,7 +21107,9 @@ ${suffix}`;
     remember = false;
     ui("status").textContent = !cleared ? "\u4FDD\u5B58\u60C5\u5831\u306E\u524A\u9664\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3002\u30D6\u30E9\u30A6\u30B6\u306E\u30B5\u30A4\u30C8\u30C7\u30FC\u30BF\u3092\u524A\u9664\u3057\u3001\u901A\u4FE1\u5FA9\u65E7\u5F8C\u306B\u30BB\u30C3\u30B7\u30E7\u30F3\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002" : revoked ? "\u30ED\u30B0\u30A2\u30A6\u30C8\u3057\u307E\u3057\u305F\u3002" : "\u7AEF\u672B\u306E\u4FDD\u5B58\u60C5\u5831\u306F\u524A\u9664\u3057\u307E\u3057\u305F\u3002\u901A\u4FE1\u5FA9\u65E7\u5F8C\u3001\u518D\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u30B5\u30FC\u30D0\u30FC\u5074\u306E\u30BB\u30C3\u30B7\u30E7\u30F3\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
   });
-  var restore = () => bridge?.restore();
+  var restore = () => {
+    if (!storageBlocked) bridge?.restore();
+  };
   ui("retry").addEventListener("click", restore);
   addEventListener("online", restore);
   addEventListener("offline", () => bridge?.block());
@@ -20992,5 +21119,5 @@ ${suffix}`;
     if (document.visibilityState === "visible") restore();
   });
   send("streamlit:componentReady", { apiVersion: 1 });
-  send("streamlit:setFrameHeight", { height: 390 });
+  send("streamlit:setFrameHeight", { height: 850 });
 })();
